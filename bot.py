@@ -1,41 +1,24 @@
 from aiogram import Bot, Dispatcher, F, Router
-from aiogram.types import (
-    Message, FSInputFile,
-    InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-)
+from aiogram.types import Message, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
-
 from db import init_tables, save_contract
+import requests, os
+
 from config import API_TOKEN, API_ENDPOINT
-import requests, os, json
 
-
-# ==== Bot ====
 bot = Bot(API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 
 
-# ==== Кнопка SkIP ====
-skip_kb = InlineKeyboardMarkup(
-    inline_keyboard=[[InlineKeyboardButton(text="⏭ Пропустить", callback_data="skip")]]
-)
-
-next_item_kb = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton("➕ Добавить товар", callback_data="add_item")],
-    [InlineKeyboardButton("📄 Сформировать договор", callback_data="finish")]
-])
+def ok(v):  # пропуск — заменяем на ___
+    return "________" if v.lower() in ["пропустить", "skip", "-"] else v
 
 
-def ok(value):   # пропуск вручную
-    return "________" if value.lower() in ["-", "пропустить", "skip"] else value
-
-
-
-# FSM ===========================
-class ContractState(StatesGroup):
+# FSM
+class Contract(StatesGroup):
     buyer_name = State()
     inn = State()
     address = State()
@@ -44,194 +27,193 @@ class ContractState(StatesGroup):
     bank = State()
     mfo = State()
     director = State()
-    
-    # товары вручную
+
     item_name = State()
-    item_quantity = State()
+    item_qty = State()
     item_price = State()
 
-    items_done = State()  # финальный этап – кнопки добавить/выполнить
+    confirm_items = State()
 
 
+# --- КНОПКИ ---
+skip_kb = InlineKeyboardMarkup(
+    inline_keyboard=[[InlineKeyboardButton(text="⏭ Пропустить", callback_data="skip")]]
+)
 
-# START ==========================
+items_menu = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить товар", callback_data="add_item")],
+        [InlineKeyboardButton(text="📄 Сформировать договор", callback_data="finish")]
+    ]
+)
+
+
+# ────────── START ──────────
 @router.message(F.text == "/start")
-async def start(message: Message, state: FSMContext):
+async def start(msg: Message, state: FSMContext):
     await state.clear()
-    await message.answer("📄 Начинаем создание договора.\nВведите *Имя покупателя*:", reply_markup=skip_kb)
-    await state.set_state(ContractState.buyer_name)
+    await msg.answer("📄 Начинаем создание договора\n\nВведите *имя покупателя*:", reply_markup=skip_kb)
+    await state.set_state(Contract.buyer_name)
 
 
-# CLIENT DATA ====================
-@router.message(ContractState.buyer_name)
-async def step_name(message, state):
-    await state.update_data(buyer_name=ok(message.text))
-    await message.answer("Введите ИНН:", reply_markup=skip_kb)
-    await state.set_state(ContractState.inn)
+@router.callback_query(F.data == "skip")
+async def skip_field(cb: CallbackQuery, state: FSMContext):
+    cur = (await state.get_state()).split(":")[-1]
 
-@router.message(ContractState.inn)
-async def step_inn(message, state):
-    await state.update_data(inn=ok(message.text))
-    await message.answer("Юридический адрес:", reply_markup=skip_kb)
-    await state.set_state(ContractState.address)
+    await state.update_data({cur: "________"})
+    await cb.answer("⏭ Пропущено")
 
-@router.message(ContractState.address)
-async def step_address(message, state):
-    await state.update_data(address=ok(message.text))
-    await message.answer("Телефон:", reply_markup=skip_kb)
-    await state.set_state(ContractState.phone)
-
-@router.message(ContractState.phone)
-async def step_phone(message, state):
-    await state.update_data(phone=ok(message.text))
-    await message.answer("Р/С:", reply_markup=skip_kb)
-    await state.set_state(ContractState.account)
-
-@router.message(ContractState.account)
-async def step_account(message, state):
-    await state.update_data(account=ok(message.text))
-    await message.answer("Банк:", reply_markup=skip_kb)
-    await state.set_state(ContractState.bank)
-
-@router.message(ContractState.bank)
-async def step_bank(message, state):
-    await state.update_data(bank=ok(message.text))
-    await message.answer("МФО:", reply_markup=skip_kb)
-    await state.set_state(ContractState.mfo)
-
-@router.message(ContractState.mfo)
-async def step_mfo(message, state):
-    await state.update_data(mfo=ok(message.text))
-    await message.answer("Директор:", reply_markup=skip_kb)
-    await state.set_state(ContractState.director)
-
-@router.message(ContractState.director)
-async def step_director(message, state):
-    await state.update_data(director=ok(message.text))
-    await state.update_data(items=[])   # создаём список товаров
-    await message.answer("🔻 Введите название товара:")
-    await state.set_state(ContractState.item_name)
-
-
-
-# ===================== товары =====================
-
-@router.message(ContractState.item_name)
-async def item_name(message, state):
-    await state.update_data(item_name=message.text)
-    await message.answer(f"Введите количество `{message.text}`:")
-    await state.set_state(ContractState.item_quantity)
-
-@router.message(ContractState.item_quantity)
-async def item_quantity(message, state):
-    if not message.text.isdigit():
-        return await message.answer("❗ Введите число")
-    await state.update_data(item_quantity=int(message.text))
-    await message.answer("Стоимость за 1 шт (UZS):")
-    await state.set_state(ContractState.item_price)
-
-@router.message(ContractState.item_price)
-async def item_price(message, state):
-    if not message.text.isdigit():
-        return await message.answer("❗ Цена должна быть числом")
-
-    data = await state.get_data()
-
-    # добавляем товар
-    item = {
-        "name": data["item_name"],
-        "quantity": data["item_quantity"],
-        "priceNoVat": int(message.text)
+    next_field = {
+        "buyer_name": Contract.inn,
+        "inn": Contract.address,
+        "address": Contract.phone,
+        "phone": Contract.account,
+        "account": Contract.bank,
+        "bank": Contract.mfo,
+        "mfo": Contract.director,
+        "director": Contract.item_name,
     }
 
-    items = data["items"]
-    items.append(item)
-    await state.update_data(items=items)
-
-    await message.answer(
-        f"Товар добавлен ✔\n\n🟦 {item['name']}\nКоличество: {item['quantity']}\nЦена: {item['priceNoVat']} сум\n",
-        reply_markup=next_item_kb
-    )
-    await state.set_state(ContractState.items_done)
+    if cur != "director":
+        return await cb.message.edit_text("Следующее поле:", reply_markup=skip_kb) or await state.set_state(next_field[cur])
+    else:
+        await cb.message.edit_text("Ввод товаров начат.\nВведите название товара:")
+        await state.set_state(Contract.item_name)
 
 
+# ────────── ПОЛЯ ЗАКАЗЧИКА ──────────
+@router.message(Contract.buyer_name)
+async def buyer(m: Message, s: FSMContext):
+    await s.update_data(buyer_name=ok(m.text))
+    await m.answer("ИНН:", reply_markup=skip_kb)
+    await s.set_state(Contract.inn)
 
-# Кнопка ➕ новый товар
+@router.message(Contract.inn)
+async def inn(m, s):
+    await s.update_data(inn=ok(m.text))
+    await m.answer("Юридический адрес:", reply_markup=skip_kb)
+    await s.set_state(Contract.address)
+
+@router.message(Contract.address)
+async def adr(m,s):
+    await s.update_data(address=ok(m.text))
+    await m.answer("Телефон:", reply_markup=skip_kb)
+    await s.set_state(Contract.phone)
+
+@router.message(Contract.phone)
+async def phone(m,s):
+    await s.update_data(phone=ok(m.text))
+    await m.answer("Р/С:", reply_markup=skip_kb)
+    await s.set_state(Contract.account)
+
+@router.message(Contract.account)
+async def acc(m,s):
+    await s.update_data(account=ok(m.text))
+    await m.answer("Банк:", reply_markup=skip_kb)
+    await s.set_state(Contract.bank)
+
+@router.message(Contract.bank)
+async def bank(m,s):
+    await s.update_data(bank=ok(m.text))
+    await m.answer("МФО:", reply_markup=skip_kb)
+    await s.set_state(Contract.mfo)
+
+@router.message(Contract.mfo)
+async def mfo(m,s):
+    await s.update_data(mfo=ok(m.text))
+    await m.answer("Директор:", reply_markup=skip_kb)
+    await s.set_state(Contract.director)
+
+@router.message(Contract.director)
+async def director(m,s):
+    await s.update_data(director=ok(m.text))
+    await s.update_data(items=[])
+    await m.answer("💼 Первый товар — введи название:")
+    await s.set_state(Contract.item_name)
+
+
+# ───────── ТОВАРЫ ─────────
 @router.callback_query(F.data == "add_item")
-async def add_next_item(callback, state):
-    await callback.message.answer("🔻 Введите название товара:")
-    await state.set_state(ContractState.item_name)
-    await callback.answer()
+async def add_new_item(cb, s):
+    await cb.message.answer("Название товара:")
+    await s.set_state(Contract.item_name)
+    await cb.answer()
 
 
+@router.message(Contract.item_name)
+async def item_name(m,s):
+    await s.update_data(curr_name=m.text)
+    await m.answer("Количество шт:")
+    await s.set_state(Contract.item_qty)
 
-# ===================== ФИНИШ: генерация PDF =====================
+
+@router.message(Contract.item_qty)
+async def qty(m,s):
+    await s.update_data(curr_qty=int(m.text))
+    await m.answer("Цена за единицу (UZS):")
+    await s.set_state(Contract.item_price)
+
+
+@router.message(Contract.item_price)
+async def price(m,s):
+    data = await s.get_data()
+    item = {
+        "name": data["curr_name"],
+        "quantity": data["curr_qty"],
+        "priceNoVat": int(m.text)
+    }
+    items = data.get("items", [])
+    items.append(item)
+    await s.update_data(items=items)
+
+    await m.answer(
+        f"📌 Добавлено: {item['name']} x{item['quantity']} по {item['priceNoVat']} сум",
+        reply_markup=items_menu
+    )
+    await s.set_state(Contract.confirm_items)
+
 
 @router.callback_query(F.data == "finish")
-async def generate(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
+async def finish(cb, s):
+    data = await s.get_data()
     items = data["items"]
 
     payload = {
         "AgreementNumber": "AUTO",
         "BuyerName": data["buyer_name"],
         "BuyerInn": data["inn"],
-        "BuyerAddress": data.get("address"),
-        "BuyerPhone": data.get("phone"),
-        "BuyerAccount": data.get("account"),
-        "BuyerBank": data.get("bank"),
-        "BuyerMfo": data.get("mfo"),
-        "BuyerDirector": data.get("director"),
-        "Items": items
+        "BuyerAddress": data["address"],
+        "BuyerPhone": data["phone"],
+        "BuyerAccount": data["account"],
+        "BuyerBank": data["bank"],
+        "BuyerMfo": data["mfo"],
+        "BuyerDirector": data["director"],
+        "Items": items,
     }
 
-    wait = await callback.message.answer("⏳ Генерирую PDF...")
+    msg = await cb.message.answer("📄 Генерация PDF...")
 
     r = requests.post(API_ENDPOINT, json=payload)
     if r.status_code != 200:
-        return await wait.edit_text(f"❌ API ERROR {r.status_code}")
+        return await msg.edit_text("❌ Ошибка API")
 
     filename = "contract.pdf"
-    open(filename, "wb").write(r.content)
+    open(filename,"wb").write(r.content)
 
-    total = sum(x["quantity"] * x["priceNoVat"] * 1.12 for x in items)
-    save_contract(data['buyer_name'], data['inn'], data['phone'], total, filename)
-
-    await wait.edit_text("✔ Договор сформирован")
-    await callback.message.answer_document(FSInputFile(filename))
-    await state.clear()
-    await callback.answer()
-
-
-
-# ===================== /history =====================
-
-@router.message(F.text == "/history")
-async def show_history(message: Message):
-    from psycopg2 import connect
-    conn = connect(
-        host=os.getenv("PGHOST"),
-        port=os.getenv("PGPORT"),
-        database=os.getenv("PGDATABASE"),
-        user=os.getenv("PGUSER"),
-        password=os.getenv("PGPASSWORD")
+    save_contract(
+        name=data["buyer_name"],
+        inn=data["inn"],
+        phone=data["phone"],
+        total=sum(i["quantity"]*i["priceNoVat"]*1.12 for i in items),
+        url=filename
     )
-    cur = conn.cursor()
-    cur.execute("SELECT id, buyer_name, total_sum, file_url, created_at FROM contracts ORDER BY id DESC LIMIT 10")
-    rows = cur.fetchall()
-    conn.close()
 
-    if not rows:
-        return await message.answer("📂 История пуста")
-
-    text = "📄 *Последние договоры:*\n\n"
-    for r in rows:
-        text += f"#{r[0]} – {r[1]} – {int(r[2])} сум – {r[4].strftime('%d.%m %H:%M')}\n"
-
-    await message.answer(text)
+    await msg.edit_text("Готово 🔥")
+    await cb.message.answer_document(FSInputFile(filename))
+    await s.clear()
 
 
-# RUN ==========================
+
 dp.include_router(router)
 
 if __name__ == "__main__":
