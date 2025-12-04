@@ -5,10 +5,12 @@ def db():
     return psycopg2.connect(
         host=os.getenv("PGHOST"),
         port=os.getenv("PGPORT"),
-        database=os.getenv("PGDATABASE"),
+        dbname=os.getenv("PGDATABASE"),
         user=os.getenv("PGUSER"),
-        password=os.getenv("PGPASSWORD")
+        password=os.getenv("PGPASSWORD"),
+        sslmode="require"   # <<< ВАЖНО на Railway!
     )
+
 
 def init_tables():
     conn = db()
