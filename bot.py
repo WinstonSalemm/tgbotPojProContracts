@@ -3,6 +3,7 @@ from aiogram.types import Message, FSInputFile
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
+from db import init_tables, save_contract
 
 import requests, json, os
 from config import API_TOKEN, API_ENDPOINT
@@ -129,13 +130,24 @@ async def step_items(message: Message, state: FSMContext):
     filename = "contract.pdf"
     open(filename, "wb").write(r.content)
 
+    # 📌 сохраняем запись о договоре в БД
+    save_contract(
+        name=data["buyer_name"],
+        inn=data["inn"],
+        phone=data["phone"],
+        total=sum(x["quantity"] * x["priceNoVat"] * 1.12 for x in items),
+        url=filename
+    )
+
     await msg.edit_text("Договор готов ✔")
     await message.answer_document(FSInputFile(filename))
     await state.clear()
+
 
 
 dp.include_router(router)
 
 
 if __name__ == "__main__":
+    init_tables()
     dp.run_polling(bot)
