@@ -1,16 +1,25 @@
-import json
-import requests
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.types import Message, FSInputFile
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
+
+import requests, json, os
 from config import API_TOKEN, API_ENDPOINT
 
+
+# ===== ENV токен обязателен =====
 bot = Bot(API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-r = Router()
+router = Router()
 
+
+# функция обработки пропусков
+def ok(value):
+    return "________" if value.lower() in ["-", "пропустить", "skip"] else value
+
+
+# FSM состояния
 class ContractState(StatesGroup):
     buyer_name = State()
     inn = State()
@@ -22,65 +31,78 @@ class ContractState(StatesGroup):
     director = State()
     items = State()
 
-# ---- START ----
-@r.message(F.text == "/start")
+
+# ================= HANDLERS =================
+
+@router.message(F.text == "/start")
 async def start(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("📄 Создание договора.\nВведите *Имя покупателя*:")
+    await message.answer("📄 Начинаем создание договора.\nВведите *Имя покупателя*: (или напишите `пропустить`)")
     await state.set_state(ContractState.buyer_name)
 
-@r.message(ContractState.buyer_name)
+
+@router.message(ContractState.buyer_name)
 async def step_name(message: Message, state: FSMContext):
-    await state.update_data(buyer_name=message.text)
-    await message.answer("ИНН покупателя:")
+    await state.update_data(buyer_name=ok(message.text))
+    await message.answer("Введите ИНН:")
     await state.set_state(ContractState.inn)
 
-@r.message(ContractState.inn)
+
+@router.message(ContractState.inn)
 async def step_inn(message: Message, state: FSMContext):
-    await state.update_data(inn=message.text)
-    await message.answer("Юр. адрес покупателя:")
+    await state.update_data(inn=ok(message.text))
+    await message.answer("Юридический адрес:")
     await state.set_state(ContractState.address)
 
-@r.message(ContractState.address)
+
+@router.message(ContractState.address)
 async def step_address(message: Message, state: FSMContext):
-    await state.update_data(address=message.text)
-    await message.answer("Контактный номер (телефон):")
+    await state.update_data(address=ok(message.text))
+    await message.answer("Телефон:")
     await state.set_state(ContractState.phone)
 
-@r.message(ContractState.phone)
+
+@router.message(ContractState.phone)
 async def step_phone(message: Message, state: FSMContext):
-    await state.update_data(phone=message.text)
-    await message.answer("Р/С + Банк:")
+    await state.update_data(phone=ok(message.text))
+    await message.answer("Р/С:")
     await state.set_state(ContractState.account)
 
-@r.message(ContractState.account)
+
+@router.message(ContractState.account)
 async def step_account(message: Message, state: FSMContext):
-    await state.update_data(account=message.text)
+    await state.update_data(account=ok(message.text))
+    await message.answer("Банк:")
+    await state.set_state(ContractState.bank)
+
+
+@router.message(ContractState.bank)
+async def step_bank(message: Message, state: FSMContext):
+    await state.update_data(bank=ok(message.text))
     await message.answer("МФО:")
     await state.set_state(ContractState.mfo)
 
-@r.message(ContractState.mfo)
+
+@router.message(ContractState.mfo)
 async def step_mfo(message: Message, state: FSMContext):
-    await state.update_data(mfo=message.text)
-    await message.answer("ФИО директора:")
+    await state.update_data(mfo=ok(message.text))
+    await message.answer("Директор:")
     await state.set_state(ContractState.director)
 
-@r.message(ContractState.director)
+
+@router.message(ContractState.director)
 async def step_director(message: Message, state: FSMContext):
-    await state.update_data(director=message.text)
-    await message.answer(
-        "Теперь отправь JSON товаров.\n"
-        "Пример:\n\n"
-        "[{\"name\":\"ОУ-5\",\"unit\":\"шт\",\"quantity\":2,\"priceNoVat\":150000}]"
-    )
+    await state.update_data(director=ok(message.text))
+    await message.answer("Отправьте JSON товаров:")
     await state.set_state(ContractState.items)
 
-@r.message(ContractState.items)
+
+@router.message(ContractState.items)
 async def step_items(message: Message, state: FSMContext):
     try:
-        items = json.loads(message.text)     # проверка JSON
+        items = json.loads(message.text)
     except:
-        return await message.answer("❌ Некорректный JSON. Попробуй ещё.")
+        return await message.answer("❌ Ошибка JSON.\nПример:\n`[{\"name\": \"ОУ-5\",\"unit\":\"шт\",\"quantity\":1,\"priceNoVat\":150000}]`")
 
     data = await state.get_data()
 
@@ -91,29 +113,29 @@ async def step_items(message: Message, state: FSMContext):
         "BuyerAddress": data["address"],
         "BuyerPhone": data["phone"],
         "BuyerAccount": data["account"],
-        "BuyerBank": data["bank"] if "bank" in data else "",
+        "BuyerBank": data["bank"],
         "BuyerMfo": data["mfo"],
         "BuyerDirector": data["director"],
         "Items": items
     }
 
-    msg = await message.answer("⏳ Генерирую договор...")
+    msg = await message.answer("⏳ Генерирую PDF...")
 
     r = requests.post(API_ENDPOINT, json=payload)
 
     if r.status_code != 200:
-        return await msg.edit_text(f"⚠ Ошибка API {r.status_code}")
+        return await msg.edit_text(f"❌ Ошибка API: {r.status_code}")
 
-    file_name = "contract.pdf"
-    open(file_name, "wb").write(r.content)
+    filename = "contract.pdf"
+    open(filename, "wb").write(r.content)
 
-    await msg.edit_text("Готово. Держи договор 📄⬇")
-    await message.answer_document(FSInputFile(file_name))
-
+    await msg.edit_text("Договор готов ✔")
+    await message.answer_document(FSInputFile(filename))
     await state.clear()
 
 
-dp.include_router(r)
+dp.include_router(router)
+
 
 if __name__ == "__main__":
     dp.run_polling(bot)
