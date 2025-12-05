@@ -178,14 +178,23 @@ async def qty(msg, state):
 @router.message(Contract.item_price)
 async def price(msg, state):
     d = await state.get_data()
-    item = dict(name=d["curr_name"], quantity=d["curr_qty"], priceNoVat=int(msg.text))
 
-    items = d["items"]; items.append(item)
+    # создаём items если их нет
+    items = d.get("items", [])
+    
+    item = dict(
+        name=d["curr_name"],
+        quantity=d["curr_qty"],
+        priceNoVat=int(msg.text)
+    )
+
+    items.append(item)
     await state.update_data(items=items)
 
-    await msg.answer(f"➕ Добавлено: {item['name']} x{item['quantity']} по {item['priceNoVat']} сум",
-                     reply_markup=items_menu)
-
+    await msg.answer(
+        f"➕ Добавлено: {item['name']} x{item['quantity']} по {item['priceNoVat']} сум",
+        reply_markup=items_menu
+    )
     await state.set_state(Contract.confirm_items)
 
 
