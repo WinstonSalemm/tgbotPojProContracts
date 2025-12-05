@@ -403,13 +403,12 @@ async def apply_buyer_edit(msg: Message, state: FSMContext):
 #   FINISH
 # =========================
 @router.callback_query(F.data == "finish")
-async def finish(cb: CallbackQuery, state: FSMContext):
+async def finish(cb, state):
     d = await state.get_data()
-    items = d.get("items", [])
 
+    items = d.get("items", [])
     if not items:
-        await cb.answer("❗ Вы не добавили ни одного товара", show_alert=True)
-        return
+        return await cb.answer("❗ Вы не добавили товары", show_alert=True)
 
     payload = dict(
         AgreementNumber="AUTO",
@@ -421,42 +420,33 @@ async def finish(cb: CallbackQuery, state: FSMContext):
         BuyerBank=d.get("bank", "________"),
         BuyerMfo=d.get("mfo", "________"),
         BuyerDirector=d.get("director", "________"),
-        Items=items,
+        Items=items
     )
 
     msg = await cb.message.answer("📄 Генерация PDF...")
 
     try:
-        r = requests.post(API_ENDPOINT, json=payload, timeout=30)
+        r = requests.post(API_ENDPOINT, json=payload)
+
+        print("===== API RESPONSE =====")
+        print("STATUS:", r.status_code)
+        print("TEXT:", r.text)
+        print("URL:", API_ENDPOINT)
+        print("========================")
+
+        if r.status_code != 200:
+            return await msg.edit_text(f"❌ Ошибка API ({r.status_code})\n\n{r.text}")
+
+        with open("contract.pdf", "wb") as f:
+            f.write(r.content)
+
+        await msg.edit_text("🔥 Договор готов")
+        await cb.message.answer_document(FSInputFile("contract.pdf"))
+        await state.clear()
+
     except Exception as e:
-        await msg.edit_text(f"❌ Ошибка запроса к API: {e}")
-        return
-
-    print("STATUS:", r.status_code)
-    print("BODY:", r.text[:500])
-
-    if r.status_code != 200:
-        await msg.edit_text("❌ Ошибка API")
-        return
-
-    file_path = "contract.pdf"
-    with open(file_path, "wb") as f:
-        f.write(r.content)
-
-    total_sum = sum(i["quantity"] * i["priceNoVat"] * 1.12 for i in items)
-
-    save_contract(
-        name=d.get("buyer_name", "________"),
-        inn=d.get("inn", "________"),
-        phone=d.get("phone", "________"),
-        total=total_sum,
-        url=file_path,
-    )
-
-    await msg.edit_text("🔥 Договор готов")
-    await cb.message.answer_document(FSInputFile(file_path))
-    await state.clear()
-
+        print("ERROR >>>", e)
+        return await msg.edit_text(f"⚠ Ошибка запроса\n{e}")
 
 # =========================
 #   ENTRYPOINT
