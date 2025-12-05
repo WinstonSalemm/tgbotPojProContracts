@@ -205,18 +205,23 @@ async def price(msg, state):
 @router.callback_query(F.data == "finish")
 async def finish(cb, state):
     d = await state.get_data()
-    items = d["items"]
+
+    # Защита, чтобы бот не падал если items отсутствует
+    items = d.get("items", [])
+    if len(items) == 0:
+        await cb.answer("❗ Вы не добавили товары", show_alert=True)
+        return
 
     payload = dict(
         AgreementNumber="AUTO",
-        BuyerName=d["buyer_name"],
-        BuyerInn=d["inn"],
-        BuyerAddress=d["address"],
-        BuyerPhone=d["phone"],
-        BuyerAccount=d["account"],
-        BuyerBank=d["bank"],
-        BuyerMfo=d["mfo"],
-        BuyerDirector=d["director"],
+        BuyerName=d.get("buyer_name", "________"),
+        BuyerInn=d.get("inn", "________"),
+        BuyerAddress=d.get("address", "________"),
+        BuyerPhone=d.get("phone", "________"),
+        BuyerAccount=d.get("account", "________"),
+        BuyerBank=d.get("bank", "________"),
+        BuyerMfo=d.get("mfo", "________"),
+        BuyerDirector=d.get("director", "________"),
         Items=items
     )
 
@@ -240,6 +245,7 @@ async def finish(cb, state):
     await msg.edit_text("🔥 Договор готов")
     await cb.message.answer_document(FSInputFile("contract.pdf"))
     await state.clear()
+
 
 
 
